@@ -1,0 +1,15 @@
+[project]
+name = "connectdot-api"
+version = "0.1.0"
+description = "FastAPI vectorization service for ConnectDot MVP"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.124.0",
+  "uvicorn[standard]>=0.38.0",
+  "python-multipart>=0.0.20",
+  "opencv-python-headless>=4.12.0",
+  "numpy>=2.2.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
