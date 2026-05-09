@@ -38,6 +38,28 @@ def contour_to_path(contour: np.ndarray) -> str:
     return " ".join(commands)
 
 
+def odd_kernel_size(value: float) -> int:
+    size = max(3, round(value))
+    return size if size % 2 == 1 else size + 1
+
+
+def outer_silhouette_contour(processed: np.ndarray, width: int, height: int) -> np.ndarray | None:
+    bridge_size = odd_kernel_size(max(width, height) / 34)
+    cleanup_size = odd_kernel_size(max(width, height) / 120)
+    bridge_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge_size, bridge_size))
+    cleanup_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cleanup_size, cleanup_size))
+    silhouette = cv2.dilate(processed, bridge_kernel, iterations=1)
+    silhouette = cv2.morphologyEx(silhouette, cv2.MORPH_CLOSE, bridge_kernel, iterations=2)
+    silhouette = cv2.morphologyEx(silhouette, cv2.MORPH_OPEN, cleanup_kernel, iterations=1)
+    contours, _ = cv2.findContours(silhouette, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(contour) < max(100, width * height * 0.01):
+        return None
+    return contour
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -77,6 +99,16 @@ async def vectorize(image: UploadFile = File(...), options: str = Form(...)) -> 
         threshold_type = cv2.THRESH_BINARY_INV if not parsed.invert else cv2.THRESH_BINARY
         _, processed = cv2.threshold(gray, parsed.threshold, 255, threshold_type)
 
+    outer_path = None
+    warnings: list[str] = []
+    outer = outer_silhouette_contour(processed, width, height)
+    if outer is not None:
+        epsilon = max(2.0, parsed.simplify / 700 * cv2.arcLength(outer, True))
+        simplified_outer = cv2.approxPolyDP(outer, epsilon, True)
+        d = contour_to_path(simplified_outer)
+        if d:
+            outer_path = {"id": "outer-silhouette", "d": d, "label": "Outer silhouette", "length": float(cv2.arcLength(simplified_outer, True))}
+
     contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     min_area = max(1.0, parsed.removeSmallDetails)
     candidates = [c for c in contours if cv2.contourArea(c) >= min_area and cv2.arcLength(c, True) > 10]
@@ -85,13 +117,15 @@ async def vectorize(image: UploadFile = File(...), options: str = Form(...)) -> 
 
     candidates.sort(key=lambda c: cv2.contourArea(c) + cv2.arcLength(c, True), reverse=True)
     paths = []
-    warnings: list[str] = []
     for index, contour in enumerate(candidates[:8], start=1):
         epsilon = parsed.simplify / 1000 * cv2.arcLength(contour, True)
         simplified = cv2.approxPolyDP(contour, epsilon, True)
         d = contour_to_path(simplified)
         if d:
             paths.append({"id": f"contour-{index}", "d": d, "label": f"Contour {index}", "length": float(cv2.arcLength(simplified, True))})
+
+    if outer_path is not None:
+        paths.append(outer_path)
 
     if not paths:
         raise HTTPException(status_code=422, detail="Contours were detected but could not be converted to paths.")

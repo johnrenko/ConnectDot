@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "ConnectDot MVP",
+  title: "ConnectDot",
   description: "Turn images into printable dot-to-dot worksheets"
 };
 

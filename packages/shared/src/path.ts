@@ -1,4 +1,4 @@
-import type { Dot, DotSettings, SvgPath } from "./index.js";
+import type { Dot, DotSettings, SvgPath } from "./index";
 
 export type Point = { x: number; y: number };
 type Segment = { from: Point; to: Point; length: number };

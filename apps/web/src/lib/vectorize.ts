@@ -23,7 +23,12 @@ export async function vectorizeFile(file: File, options: VectorizeOptions): Prom
   form.append("options", JSON.stringify(options));
   try {
     const response = await fetch("/api/vectorize", { method: "POST", body: form });
-    if (response.ok) return (await response.json()) as VectorizeResponse;
+    if (response.ok) {
+      const payload = await response.json() as VectorizeResponse | { fallback?: string };
+      if ("fallback" in payload) return vectorizeRasterInBrowser(file, options);
+      if (!("paths" in payload)) return vectorizeRasterInBrowser(file, options);
+      return payload;
+    }
   } catch {
     // Browser fallback below keeps the MVP usable without the Python service.
   }
@@ -67,28 +72,17 @@ async function vectorizeRasterInBrowser(file: File, options: VectorizeOptions): 
   if (!ctx) throw new Error("Canvas is not available for browser vectorization.");
   ctx.drawImage(image, 0, 0, width, height);
   const data = ctx.getImageData(0, 0, width, height);
-  const mask = new Uint8Array(width * height);
-  for (let i = 0; i < mask.length; i++) {
+  const ink = new Uint8Array(width * height);
+  for (let i = 0; i < ink.length; i++) {
     const offset = i * 4;
     const gray = data.data[offset] * 0.299 + data.data[offset + 1] * 0.587 + data.data[offset + 2] * 0.114;
     const on = options.mode === "canny" ? gray < options.threshold || gray > 255 - options.threshold / 2 : gray < options.threshold;
-    mask[i] = options.invert ? (on ? 0 : 1) : (on ? 1 : 0);
+    ink[i] = options.invert ? (on ? 0 : 1) : (on ? 1 : 0);
   }
-  const points: { x: number; y: number }[] = [];
-  const step = Math.max(1, Math.round(options.removeSmallDetails / 10));
-  for (let y = 1; y < height - 1; y += step) {
-    for (let x = 1; x < width - 1; x += step) {
-      const i = y * width + x;
-      if (!mask[i]) continue;
-      if (!mask[i - 1] || !mask[i + 1] || !mask[i - width] || !mask[i + width]) points.push({ x, y });
-    }
-  }
-  if (points.length < 3) throw new Error("Could not extract a clear outline. Try invert/threshold controls or a simpler image.");
-  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
-  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
-  points.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-  const stride = Math.max(1, Math.round(options.simplify));
-  const simplified = points.filter((_, i) => i % stride === 0).slice(0, 1200);
+  const silhouette = buildSilhouetteMask(ink, width, height);
+  const outline = traceSilhouetteOutline(silhouette, width, height);
+  if (outline.length < 3) throw new Error("Could not extract a clear outline. Try invert/threshold controls or a simpler image.");
+  const simplified = simplifyPoints(outline, Math.max(1, options.simplify)).slice(0, 1200);
   const d = simplified.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + " Z";
   return {
     svgWidth: width,
@@ -97,4 +91,125 @@ async function vectorizeRasterInBrowser(file: File, options: VectorizeOptions): 
     selectedPathId: "browser-outline",
     warnings: ["Used browser fallback vectorization. For cleaner contours, run the FastAPI service."]
   };
+}
+
+function buildSilhouetteMask(ink: Uint8Array, width: number, height: number): Uint8Array {
+  const radius = Math.max(2, Math.round(Math.max(width, height) / 160));
+  const barrier = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!ink[y * width + x]) continue;
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) barrier[ny * width + nx] = 1;
+        }
+      }
+    }
+  }
+
+  const exterior = new Uint8Array(width * height);
+  const queue: number[] = [];
+  const enqueue = (x: number, y: number) => {
+    const i = y * width + x;
+    if (barrier[i] || exterior[i]) return;
+    exterior[i] = 1;
+    queue.push(i);
+  };
+  for (let x = 0; x < width; x++) {
+    enqueue(x, 0);
+    enqueue(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    enqueue(0, y);
+    enqueue(width - 1, y);
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head] ?? 0;
+    const x = i % width;
+    const y = Math.floor(i / width);
+    if (x > 0) enqueue(x - 1, y);
+    if (x < width - 1) enqueue(x + 1, y);
+    if (y > 0) enqueue(x, y - 1);
+    if (y < height - 1) enqueue(x, y + 1);
+  }
+
+  const silhouette = new Uint8Array(width * height);
+  for (let i = 0; i < silhouette.length; i++) silhouette[i] = exterior[i] ? 0 : 1;
+  return silhouette;
+}
+
+type OutlinePoint = { x: number; y: number };
+
+function traceSilhouetteOutline(mask: Uint8Array, width: number, height: number): OutlinePoint[] {
+  const edge = (name: "top" | "right" | "bottom" | "left", x: number, y: number): string => {
+    if (name === "top") return `${2 * x + 1},${2 * y}`;
+    if (name === "right") return `${2 * x + 2},${2 * y + 1}`;
+    if (name === "bottom") return `${2 * x + 1},${2 * y + 2}`;
+    return `${2 * x},${2 * y + 1}`;
+  };
+  const table: Record<number, Array<[string, string]>> = {
+    1: [["left", "top"]], 2: [["top", "right"]], 3: [["left", "right"]],
+    4: [["right", "bottom"]], 5: [["left", "top"], ["right", "bottom"]], 6: [["top", "bottom"]],
+    7: [["left", "bottom"]], 8: [["bottom", "left"]], 9: [["top", "bottom"]],
+    10: [["top", "right"], ["bottom", "left"]], 11: [["right", "bottom"]],
+    12: [["left", "right"]], 13: [["top", "right"]], 14: [["left", "top"]]
+  };
+  const adjacency = new Map<string, Set<string>>();
+  const unused = new Set<string>();
+  const addSegment = (a: string, b: string) => {
+    if (!adjacency.has(a)) adjacency.set(a, new Set());
+    if (!adjacency.has(b)) adjacency.set(b, new Set());
+    adjacency.get(a)?.add(b);
+    adjacency.get(b)?.add(a);
+    unused.add(segmentKey(a, b));
+  };
+  for (let y = 0; y < height - 1; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      const state = (mask[y * width + x] ? 1 : 0)
+        + (mask[y * width + x + 1] ? 2 : 0)
+        + (mask[(y + 1) * width + x + 1] ? 4 : 0)
+        + (mask[(y + 1) * width + x] ? 8 : 0);
+      for (const [a, b] of table[state] ?? []) addSegment(edge(a as "top", x, y), edge(b as "top", x, y));
+    }
+  }
+  let best: string[] = [];
+  while (unused.size > 0) {
+    const first = unused.values().next().value as string;
+    const [a, b] = first.split("|");
+    const path = [a ?? "", b ?? ""];
+    unused.delete(first);
+    extendPath(path, adjacency, unused, true);
+    extendPath(path, adjacency, unused, false);
+    if (path.length > best.length) best = path;
+  }
+  return best.map((key) => {
+    const [x, y] = key.split(",").map(Number);
+    return { x: (x ?? 0) / 2, y: (y ?? 0) / 2 };
+  });
+}
+
+function segmentKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function extendPath(path: string[], adjacency: Map<string, Set<string>>, unused: Set<string>, atEnd: boolean): void {
+  while (true) {
+    const current = atEnd ? path.at(-1) : path[0];
+    if (!current) return;
+    const next = Array.from(adjacency.get(current) ?? []).find((candidate) => unused.has(segmentKey(current, candidate)));
+    if (!next) return;
+    unused.delete(segmentKey(current, next));
+    if (atEnd) path.push(next);
+    else path.unshift(next);
+  }
+}
+
+function simplifyPoints(points: OutlinePoint[], tolerance: number): OutlinePoint[] {
+  if (points.length <= 2) return points;
+  const step = Math.max(1, Math.round(tolerance));
+  const sampled = points.filter((_, i) => i % step === 0);
+  return sampled.length >= 3 ? sampled : points;
 }

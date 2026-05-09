@@ -12,6 +12,6 @@ export async function POST(request: NextRequest) {
       headers: { "content-type": response.headers.get("content-type") ?? "application/json" }
     });
   } catch {
-    return NextResponse.json({ detail: "Vectorization service is unavailable." }, { status: 503 });
+    return NextResponse.json({ fallback: "browser" });
   }
 }

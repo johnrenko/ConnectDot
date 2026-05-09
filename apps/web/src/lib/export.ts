@@ -14,18 +14,27 @@ export function buildWorksheetSvg(project: DotProject): string {
   const line = project.settings.showConnectionHelperLine
     ? `<polyline points="${project.dots.map((d) => `${offsetX + d.x * scale},${offsetY + d.y * scale}`).join(" ")}" fill="none" stroke="#b9c0cc" stroke-width="1" stroke-dasharray="4 6"/>`
     : "";
+  const originalImageMode = project.settings.originalImageMode ?? (project.settings.keepOriginalImageInside ? "inside-outline" : "none");
+  const eraserMask = project.eraserStrokes.length > 0
+    ? `<defs><mask id="source-image-erase-mask" maskUnits="userSpaceOnUse"><rect x="${offsetX}" y="${offsetY}" width="${project.svgWidth * scale}" height="${project.svgHeight * scale}" fill="#fff"/>${project.eraserStrokes.map((stroke) => `<path d="${eraserStrokePath(stroke)}" transform="translate(${offsetX} ${offsetY}) scale(${scale})" fill="none" stroke="#000" stroke-width="${stroke.radius * 2}" stroke-linecap="round" stroke-linejoin="round"/>`).join("")}</mask></defs>`
+    : "";
+  const originalImage = project.sourceImageDataUrl && originalImageMode !== "none"
+    ? `${selected && originalImageMode === "inside-outline" ? `<defs><clipPath id="source-image-clip"><path d="${selected.d}" transform="translate(${offsetX} ${offsetY}) scale(${scale})"/></clipPath></defs>` : ""}${eraserMask}
+  <image href="${escapeXml(project.sourceImageDataUrl)}" x="${offsetX}" y="${offsetY}" width="${project.svgWidth * scale}" height="${project.svgHeight * scale}" preserveAspectRatio="none" opacity="${project.settings.originalImageOpacity}"${selected && originalImageMode === "inside-outline" ? ` clip-path="url(#source-image-clip)"` : ""}${project.eraserStrokes.length > 0 ? ` mask="url(#source-image-erase-mask)"` : ""}/>`
+    : "";
   const outline = selected && project.settings.keepOutlineVisible
     ? `<path d="${selected.d}" transform="translate(${offsetX} ${offsetY}) scale(${scale})" fill="none" stroke="#d5dae3" stroke-width="${1 / scale}"/>`
     : "";
   const dots = project.dots.map((dot) => `
     <circle cx="${offsetX + dot.x * scale}" cy="${offsetY + dot.y * scale}" r="${project.settings.dotRadius}" fill="#111827"/>
-    <text x="${offsetX + dot.labelX * scale}" y="${offsetY + dot.labelY * scale}" font-family="Arial, sans-serif" font-size="${project.settings.labelFontSize}" fill="#111827">${dot.index}</text>`).join("");
+    <text x="${offsetX + dot.labelX * scale}" y="${offsetY + dot.labelY * scale}" font-family="Arial, sans-serif" font-size="${project.settings.labelFontSize}" fill="#111827" stroke="#fff" stroke-width="3" paint-order="stroke">${dot.index}</text>`).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${A4.width}" height="${A4.height}" viewBox="0 0 ${A4.width} ${A4.height}">
   <rect x="24" y="24" width="746" height="1075" fill="white" stroke="#111827" stroke-width="2"/>
   <text x="72" y="82" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#111827">${escapeXml(project.title)}</text>
   <text x="72" y="128" font-family="Arial, sans-serif" font-size="18" fill="#111827">Name: __________________________</text>
   <text x="510" y="110" font-family="Arial, sans-serif" font-size="16" fill="#111827">Connect the dots from ${project.settings.startIndex} to ${project.settings.startIndex + project.dots.length - 1}</text>
   <text x="510" y="136" font-family="Arial, sans-serif" font-size="16" fill="#111827">Color the picture</text>
+  ${originalImage}
   ${line}
   ${outline}
   ${dots}
@@ -75,4 +84,8 @@ export function printWorksheetPdf(project: DotProject): void {
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;", "'": "&apos;" })[char] ?? char);
+}
+
+function eraserStrokePath(stroke: DotProject["eraserStrokes"][number]): string {
+  return stroke.points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
 }

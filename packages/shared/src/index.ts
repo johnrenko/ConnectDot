@@ -42,6 +42,14 @@ export type Dot = {
   labelWarning?: boolean;
 };
 
+export type OriginalImageMode = "none" | "inside-outline" | "full";
+
+export type EraserStroke = {
+  id: string;
+  radius: number;
+  points: Array<{ x: number; y: number }>;
+};
+
 export type DotSettings = {
   numberOfDots: number;
   minimumDistance: number;
@@ -51,17 +59,23 @@ export type DotSettings = {
   reverseOrder: boolean;
   keepOutlineVisible: boolean;
   showConnectionHelperLine: boolean;
+  originalImageMode: OriginalImageMode;
+  keepOriginalImageInside: boolean;
+  originalImageOpacity: number;
+  eraserRadius: number;
 };
 
 export type DotProject = {
   id: string;
   title: string;
   sourceImageName?: string;
+  sourceImageDataUrl?: string;
   svgWidth: number;
   svgHeight: number;
   paths: SvgPath[];
   selectedPathId: string;
   dots: Dot[];
+  eraserStrokes: EraserStroke[];
   settings: DotSettings;
 };
 
@@ -75,25 +89,38 @@ export const defaultVectorizeOptions: VectorizeOptions = {
 };
 
 export const defaultDotSettings: DotSettings = {
-  numberOfDots: 50,
+  numberOfDots: 35,
   minimumDistance: 10,
   dotRadius: 3,
   labelFontSize: 12,
   startIndex: 1,
   reverseOrder: false,
   keepOutlineVisible: true,
-  showConnectionHelperLine: false
+  showConnectionHelperLine: false,
+  originalImageMode: "none",
+  keepOriginalImageInside: false,
+  originalImageOpacity: 0.55,
+  eraserRadius: 24
 };
 
-export const createDefaultProject = (input?: Partial<DotProject>): DotProject => ({
-  id: input?.id ?? `project-${Date.now()}`,
-  title: input?.title ?? "Connect the dots",
-  svgWidth: input?.svgWidth ?? 800,
-  svgHeight: input?.svgHeight ?? 600,
-  paths: input?.paths ?? [],
-  selectedPathId: input?.selectedPathId ?? "",
-  dots: input?.dots ?? [],
-  settings: { ...defaultDotSettings, ...input?.settings },
-  sourceImageName: input?.sourceImageName
-});
-export { deserializeProject, distance, filterByMinimumDistance, generateDotsForPath, placeLabels, samplePath, serializeProject } from "./path.js";
+export const createDefaultProject = (input?: Partial<DotProject>): DotProject => {
+  const settings = {
+    ...defaultDotSettings,
+    ...input?.settings,
+    originalImageMode: input?.settings?.originalImageMode ?? (input?.settings?.keepOriginalImageInside ? "inside-outline" : defaultDotSettings.originalImageMode)
+  };
+  return {
+    id: input?.id ?? `project-${Date.now()}`,
+    title: input?.title ?? "Connect the dots",
+    svgWidth: input?.svgWidth ?? 800,
+    svgHeight: input?.svgHeight ?? 600,
+    paths: input?.paths ?? [],
+    selectedPathId: input?.selectedPathId ?? "",
+    dots: input?.dots ?? [],
+    eraserStrokes: input?.eraserStrokes ?? [],
+    settings,
+    sourceImageName: input?.sourceImageName,
+    sourceImageDataUrl: input?.sourceImageDataUrl
+  };
+};
+export { deserializeProject, distance, filterByMinimumDistance, generateDotsForPath, placeLabels, samplePath, serializeProject } from "./path";

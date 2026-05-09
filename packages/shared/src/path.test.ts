@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { defaultDotSettings, type DotProject, type SvgPath } from "./index.js";
-import { deserializeProject, generateDotsForPath, placeLabels, samplePath, serializeProject } from "./path.js";
+import { defaultDotSettings, type DotProject, type SvgPath } from "./index";
+import { deserializeProject, generateDotsForPath, placeLabels, samplePath, serializeProject } from "./path";
 
 const square: SvgPath = { id: "square", d: "M0 0 L100 0 L100 100 L0 100 Z" };
 
