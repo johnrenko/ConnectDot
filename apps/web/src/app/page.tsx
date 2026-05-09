@@ -28,6 +28,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [selectedDotId, setSelectedDotId] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DragTarget>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>("dots");
@@ -48,6 +49,7 @@ export default function Home() {
       return;
     }
     const sourceImageDataUrl = await readFileDataUrl(file);
+    setSourceFile(file);
     setFilePreview(sourceImageDataUrl);
     setBusy(true);
     try {
@@ -81,6 +83,35 @@ export default function Home() {
   function generateDots() {
     if (!selectedPath) return;
     setProject((current) => ({ ...current, dots: generateDotsForPath(selectedPath, current.settings) }));
+  }
+
+  async function applyOutlineCleanup() {
+    const file = sourceFile ?? await fileFromProject(project);
+    if (!file) {
+      setError("Upload the original image again before applying outline cleanup.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await vectorizeFile(file, options);
+      setWarnings(result.warnings);
+      setProject((current) => {
+        const path = result.paths.find((candidate) => candidate.id === result.selectedPathId) ?? result.paths[0];
+        return {
+          ...current,
+          svgWidth: result.svgWidth,
+          svgHeight: result.svgHeight,
+          paths: result.paths,
+          selectedPathId: result.selectedPathId,
+          dots: path ? generateDotsForPath(path, current.settings) : []
+        };
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not apply outline cleanup.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function selectPath(pathId: string) {
@@ -232,6 +263,8 @@ export default function Home() {
             setEditorMode={setEditorMode}
             undoErase={undoErase}
             clearErase={clearErase}
+            applyOutlineCleanup={applyOutlineCleanup}
+            busy={busy}
           />
           <div className="row">
             <button className="button" disabled={busy || !selectedPath} onClick={generateDots}>{busy ? "Making worksheet..." : "Update dots"}</button>
@@ -318,6 +351,13 @@ function readFileDataUrl(file: File): Promise<string> {
   });
 }
 
+async function fileFromProject(project: DotProject): Promise<File | null> {
+  if (!project.sourceImageDataUrl) return null;
+  const response = await fetch(project.sourceImageDataUrl);
+  const blob = await response.blob();
+  return new File([blob], project.sourceImageName ?? "source-image", { type: blob.type || "image/png" });
+}
+
 function getOriginalImageMode(project: DotProject): OriginalImageMode {
   if (project.settings.originalImageMode) return project.settings.originalImageMode;
   return project.settings.keepOriginalImageInside ? "inside-outline" : "none";
@@ -327,7 +367,7 @@ function eraserStrokePath(stroke: EraserStroke): string {
   return stroke.points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
 }
 
-function Controls({ options, setOptions, project, setProject, updateSetting, selectPath, editorMode, setEditorMode, undoErase, clearErase }: {
+function Controls({ options, setOptions, project, setProject, updateSetting, selectPath, editorMode, setEditorMode, undoErase, clearErase, applyOutlineCleanup, busy }: {
   options: VectorizeOptions;
   setOptions: (options: VectorizeOptions) => void;
   project: DotProject;
@@ -338,6 +378,8 @@ function Controls({ options, setOptions, project, setProject, updateSetting, sel
   setEditorMode: (mode: EditorMode) => void;
   undoErase: () => void;
   clearErase: () => void;
+  applyOutlineCleanup: () => void;
+  busy: boolean;
 }) {
   return <div className="stack">
     <strong>2. Make it kid friendly</strong>
@@ -372,6 +414,7 @@ function Controls({ options, setOptions, project, setProject, updateSetting, sel
       <label className="label">Remove small details {options.removeSmallDetails}<input type="range" min="1" max="100" value={options.removeSmallDetails} onChange={(event) => setOptions({ ...options, removeSmallDetails: Number(event.target.value) })} /></label>
       <label className="label">Simplify outline {options.simplify}<input type="range" min="1" max="20" value={options.simplify} onChange={(event) => setOptions({ ...options, simplify: Number(event.target.value) })} /></label>
       <label className="row"><input type="checkbox" checked={options.invert} onChange={(event) => setOptions({ ...options, invert: event.target.checked })} /> Invert image</label>
+      <button type="button" className="button" disabled={busy || !project.sourceImageDataUrl} onClick={applyOutlineCleanup}>{busy ? "Applying..." : "Apply cleanup"}</button>
     </details>
   </div>;
 }

@@ -22,6 +22,7 @@ export function buildWorksheetSvg(project: DotProject): string {
     ? `${selected && originalImageMode === "inside-outline" ? `<defs><clipPath id="source-image-clip"><path d="${selected.d}" transform="translate(${offsetX} ${offsetY}) scale(${scale})"/></clipPath></defs>` : ""}${eraserMask}
   <image href="${escapeXml(project.sourceImageDataUrl)}" x="${offsetX}" y="${offsetY}" width="${project.svgWidth * scale}" height="${project.svgHeight * scale}" preserveAspectRatio="none" opacity="${project.settings.originalImageOpacity}"${selected && originalImageMode === "inside-outline" ? ` clip-path="url(#source-image-clip)"` : ""}${project.eraserStrokes.length > 0 ? ` mask="url(#source-image-erase-mask)"` : ""}/>`
     : "";
+  const eraserOverlay = project.eraserStrokes.map((stroke) => `<path d="${eraserStrokePath(stroke)}" transform="translate(${offsetX} ${offsetY}) scale(${scale})" fill="none" stroke="#fff" stroke-width="${stroke.radius * 2}" stroke-linecap="round" stroke-linejoin="round"/>`).join("");
   const outline = selected && project.settings.keepOutlineVisible
     ? `<path d="${selected.d}" transform="translate(${offsetX} ${offsetY}) scale(${scale})" fill="none" stroke="#d5dae3" stroke-width="${1 / scale}"/>`
     : "";
@@ -35,6 +36,7 @@ export function buildWorksheetSvg(project: DotProject): string {
   <text x="510" y="110" font-family="Arial, sans-serif" font-size="16" fill="#111827">Connect the dots from ${project.settings.startIndex} to ${project.settings.startIndex + project.dots.length - 1}</text>
   <text x="510" y="136" font-family="Arial, sans-serif" font-size="16" fill="#111827">Color the picture</text>
   ${originalImage}
+  ${eraserOverlay}
   ${line}
   ${outline}
   ${dots}
